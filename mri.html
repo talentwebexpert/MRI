@@ -1,0 +1,665 @@
+
+<html>
+<head>
+<title>MRI Physics: Interactive MRI Noise and Artifact Simulation - XRayPhysics</title>
+<meta name="description" content="This page discusses factors related to MRI image formation and noise, including bandwidth, rectangular FOV, and phase undersampling, with an interactive simulation. We also dicsuss and simulate MRI artifacts.">
+<meta name="keywords" content="MRI, MRI physics, SNR, interactive simulation, bandwidth, k-space, spatial frequency, rectangular FOV, phase undersampling, mri artifacts, zebra artifact, rf contamination">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" type="text/css" href="styles.css">
+<script src="testjava.js"></script>
+<script language="Javascript">
+//constants
+var gamma = 42.6;
+var baseline_SNR = 0.00239528969457113;
+var TR = 1;
+var ETL = 8;
+
+//inital values, for comparisons
+var init_Gx = 10;
+var init_BW = 32;
+var init_N = 256;
+var init_scanpct = 100;
+var init_Nx = 256;
+var init_Ny = 256;
+var init_NEX = 1;
+var init_dz = 1;
+var init_dtx = .03;
+var init_tx = 8;
+var init_dkx = .13;
+var init_kx = 34.1;
+var init_dky = .13;
+var init_ky = 34.1;
+var init_dx = .29;
+var init_FOVx = 7.5;
+var init_dy = .29;
+var init_FOVy = 7.5;
+var init_RFOV = 100;
+var init_scantime = 32;
+var init_BWpix = 125;
+
+function getColor(newval, initval) {
+	if(newval > initval) {
+		return "green";
+	} else if(newval < initval) {
+		return "red";
+	} else {
+		return "black";
+	}
+}
+
+//** Event Functions **//
+
+//calculate all boxes from initial values
+function init_calc() {
+	calculate_halfBW();
+	calculate_matrix();
+	calculate_BWpixel();
+	calculate_sampling_time();
+	calculate_FOVx();
+	calculate_dy();
+	
+	calculate_Kspace();
+	
+	calculate_SNR();
+}
+
+//change the BW; now, this will assume fixed FOV and calculate Gx accordingly
+function change_BW() {
+	var BW = parseInt(document.getElementById('BW').value);
+	//color our new value
+	document.getElementById('BW').style.color = getColor(BW, init_BW);
+
+	//calculate new Gx
+	var FOVx = parseFloat(document.getElementById('FOVx').value);
+	
+	var Gx = BW / (gamma * FOVx) * 100; //convert to mT/m
+	Gx = Math.round(Gx * 10) / 10;
+	
+	document.getElementById('Gx').value = Gx;
+	document.getElementById('Gx').style.color = getColor(Gx, init_Gx);	
+
+	calculate_halfBW();
+	calculate_sampling_time();
+	calculate_BWpixel();
+	
+	calculate_SNR();
+}
+
+function change_N() { //change N or scan pct
+	//color our new value
+	document.getElementById('N').style.color = getColor(document.getElementById('N').value, init_N);
+	document.getElementById('scan_pct').style.color = getColor(document.getElementById('scan_pct').value, init_scanpct);
+	document.getElementById('Nx').style.color = getColor(document.getElementById('Nx').value, init_Nx);
+	document.getElementById('Ny').style.color = getColor(document.getElementById('Ny').value, init_Ny);
+	
+	calculate_matrix();
+	calculate_BWpixel();
+	calculate_sampling_time(); //while deltatx doesn't change, total sampling time does
+	calculate_FOVx();
+	calculate_dy();
+	calculate_Kspace();
+	calculate_SNR();
+}
+
+function change_NEXz() { //change NEX or deltaz
+	//color our new value
+	document.getElementById('NEX').style.color = getColor(document.getElementById('NEX').value, init_NEX);
+	document.getElementById('dz').style.color = getColor(document.getElementById('dz').value, init_dz);
+
+	calculate_SNR();
+}
+
+function change_FOV() { //change FOV - assume constant matrix size, BW
+	var FOVx = parseFloat(document.getElementById('FOVx').value);
+	var Nx = parseInt(document.getElementById('Nx').value);
+	//color our new value
+	document.getElementById('FOVx').style.color = getColor(document.getElementById('FOVx').value, init_FOVx);
+	
+	var BW = parseInt(document.getElementById('BW').value);
+	
+	var dx = FOVx / Nx * 10; // convert to mm
+	dx = Math.round(dx * 100) / 100;
+	
+	document.getElementById('dx').value = dx;
+	document.getElementById('dx').style.color = getColor(dx, init_dx);
+
+	//calculate new Gx
+	var Gx = BW / (gamma * FOVx) * 100; //convert to mT/m
+	Gx = Math.round(Gx * 10) / 10;
+	
+	document.getElementById('Gx').value = Gx;
+	document.getElementById('Gx').style.color = getColor(Gx, init_Gx);
+	
+	calculate_dy();
+	calculate_Kspace();
+	calculate_SNR();
+}
+
+function change_RFOV() { //change RFOV percentage
+	//color our new value
+	document.getElementById('RFOV').style.color = getColor(document.getElementById('RFOV').value, init_RFOV);
+	
+	calculate_matrix();
+	calculate_dy();
+	calculate_Kspace();
+	calculate_SNR();
+}
+
+function change_Res() { //change resolution - assume constant FOV
+	//color our new value
+	var dx = parseFloat(document.getElementById('dx').value);
+	document.getElementById('dx').style.color = getColor(dx, init_dx);
+	
+	var FOVx = parseFloat(document.getElementById('FOVx').value);
+	
+	var N = FOVx * 10 / dx; //N = Nx
+	N = Math.round(N);
+	
+	document.getElementById('N').value = N;
+	document.getElementById('N').style.color = getColor(N, init_N);
+	
+	calculate_matrix();
+	calculate_sampling_time(); //while deltatx doesn't change, total sampling time does
+	calculate_FOVx();
+	calculate_dy();
+	calculate_Kspace();
+	calculate_SNR();
+}
+
+//** Calculation Functions **//
+function calculate_halfBW() { //calculate 1/2 of BW for the plusminus box
+	var BW = parseInt(document.getElementById('BW').value);
+	
+	var halfBW = BW/2;
+	
+	document.getElementById('BW2').value = halfBW;
+}
+
+function calculate_matrix() { //calculate Nx, Ny from matrix size, scan percentage, RFOV
+	var N = parseInt(document.getElementById('N').value);
+	var scan_pct = parseInt(document.getElementById('scan_pct').value);
+	var RFOV = parseInt(document.getElementById('RFOV').value);
+	
+	var Nx = N;
+	var Ny = N * scan_pct/100 * RFOV/100;
+	Ny = Math.round(Ny);
+	
+	document.getElementById('Nx').value = Nx;
+	document.getElementById('Nx').style.color = getColor(Nx, init_Nx);
+	document.getElementById('Ny').value = Ny;
+	document.getElementById('Ny').style.color = getColor(Ny, init_Ny);
+}
+
+function calculate_sampling_time() { //calculate dtx, tx from BW, Nx
+	var BW = parseInt(document.getElementById('BW').value);
+	var Nx = parseInt(document.getElementById('Nx').value);
+	
+	var dtx = 1/BW;
+	var tx = dtx * Nx;
+	
+	dtx = Math.round(dtx*100)/100;
+	tx = Math.round(tx);
+	
+	document.getElementById('dtx').value = dtx;
+	document.getElementById('dtx').style.color = getColor(dtx, init_dtx);
+	document.getElementById('tx').value = tx;
+	document.getElementById('tx').style.color = getColor(tx, init_tx);
+}
+
+function calculate_FOVx() { //calc FOVx from BW, G; also get x-resolution from Nx
+	var BW = parseInt(document.getElementById('BW').value);
+	var Gx = parseInt(document.getElementById('Gx').value);
+	var Nx = parseInt(document.getElementById('Nx').value);
+	
+	var FOVx = BW/(gamma * Gx) * 100; //convert to cm
+	var dx = FOVx / Nx * 10; // convert to mm
+	
+	FOVx = Math.round(FOVx * 10) / 10;
+	dx = Math.round(dx * 100) / 100;
+	
+	document.getElementById('FOVx').value = FOVx;
+	document.getElementById('FOVx').style.color = getColor(FOVx, init_FOVx);
+	document.getElementById('dx').value = dx;
+	document.getElementById('dx').style.color = getColor(dx, init_dx);
+}
+
+function calculate_dy() { //calculate RFOV; then dy
+	var RFOV = parseInt(document.getElementById('RFOV').value);
+	var FOVx = parseFloat(document.getElementById('FOVx').value);
+	var Ny = parseInt(document.getElementById('Ny').value);
+	
+	var FOVy = FOVx * RFOV/100; //RFOV is a percent
+	var dy = FOVy / Ny * 10; //convert to mm
+	
+	FOVy = Math.round(FOVy * 10) / 10;
+	dy = Math.round(dy * 100) / 100;
+	
+	document.getElementById('FOVy').value = FOVy;
+	document.getElementById('FOVy').style.color = getColor(FOVy, init_FOVy);
+	document.getElementById('dy').value = dy;
+	document.getElementById('dy').style.color = getColor(dy, init_dy);
+}
+
+function calculate_Kspace() { //calculate dkx, kx from Nx, FOVx; same for y
+	var FOVx = parseFloat(document.getElementById('FOVx').value);
+	var Nx = parseInt(document.getElementById('Nx').value);
+	var FOVy = parseFloat(document.getElementById('FOVy').value);
+	var Ny = parseInt(document.getElementById('Ny').value);
+	
+	var dkx = 1 / FOVx;
+	var kx = dkx * Nx;
+	var dky = 1 / FOVy;
+	var ky = dky * Ny;
+	
+	dkx = Math.round(dkx * 100) / 100;
+	kx = Math.round(kx * 10) / 10;
+	
+	dky = Math.round(dky * 100) / 100;
+	ky = Math.round(ky * 10) / 10;
+	
+	document.getElementById('dkx').value = dkx;
+	document.getElementById('dkx').style.color = getColor(dkx, init_dkx);
+	document.getElementById('kx').value = kx;
+	document.getElementById('kx').style.color = getColor(kx, init_kx);
+	
+	document.getElementById('dky').value = dky;
+	document.getElementById('dky').style.color = getColor(dky, init_dky);
+	document.getElementById('ky').value = ky;
+	document.getElementById('ky').style.color = getColor(ky, init_ky);
+}
+
+function calculate_SNR() { //calculate SNR, scan time
+	var FOVx = parseFloat(document.getElementById('FOVx').value);
+	var Nx = parseInt(document.getElementById('Nx').value);
+	var FOVy = parseFloat(document.getElementById('FOVy').value);
+	var Ny = parseInt(document.getElementById('Ny').value);
+	
+	var dz = parseFloat(document.getElementById('dz').value);
+	var NEX = parseFloat(document.getElementById('NEX').value);
+	
+	var BW = parseInt(document.getElementById('BW').value);
+	
+	var SNR = FOVx/Nx * FOVy * dz * Math.sqrt(NEX / (Ny * BW));
+	SNR = SNR / baseline_SNR;
+	
+	SNR = Math.round(SNR * 10) / 10;
+	
+	document.getElementById('SNR').value = SNR;
+	document.getElementById('SNR').style.color = getColor(SNR, 1);
+	
+	if(SNR > 1) {
+		document.getElementById('SNR_text').innerHTML = "SNR Improved!";
+	} else if(SNR < 1) {
+		document.getElementById('SNR_text').innerHTML = "SNR Reduced!";
+	} else {
+		document.getElementById('SNR_text').innerHTML = "SNR Unchanged.";
+	}
+	
+	var scan_time = TR * Ny * NEX / ETL;
+	scan_time = Math.round(scan_time);
+	document.getElementById('scan_time').value = scan_time;
+	document.getElementById('scan_time').style.color = getColor(scan_time, init_scantime);
+	
+	if(scan_time > init_scantime) {
+		document.getElementById('scan_time_text').innerHTML = "Scan time Lengthened!";
+	} else if(scan_time < init_scantime) {
+		document.getElementById('scan_time_text').innerHTML = "Scan time Reduced!";
+	} else {
+		document.getElementById('scan_time_text').innerHTML = "Scan time Unchanged.";
+	}
+	
+	//also display text for FOV, resolution
+	var dxy = document.getElementById('dx').value * document.getElementById('dy').value;
+	var init_dxy = init_dx * init_dy;
+	if(dxy > init_dxy) {
+		document.getElementById('Res_text').innerHTML = "Resolution Worsened!";
+	} else if(dxy < init_dxy) {
+		document.getElementById('Res_text').innerHTML = "Resolution Improved!";
+	} else {
+		document.getElementById('Res_text').innerHTML = "Resolution Unchanged.";
+	}
+	
+	var fov = FOVx * FOVy;
+	var init_FOV = init_FOVx * init_FOVy;
+	if(fov > init_FOV) {
+		document.getElementById('FOV_text').innerHTML = "FOV Larger!";
+	} else if(fov < init_FOV) {
+		document.getElementById('FOV_text').innerHTML = "FOV Smaller!";
+	} else {
+		document.getElementById('FOV_text').innerHTML = "FOV Unchanged.";
+	}
+	
+	//update applet
+	var scan_pct = document.getElementById('scan_pct').value / 100;
+	var RFOV = document.getElementById('RFOV').value / 100;
+	var NEX_ = NEX;
+	if(NEX < 1) { //NEX < 1 dealt with inside applet
+		NEX_ = 1;
+	}
+	var RFOV_ = RFOV;
+	if(RFOV < 1) { //applet deals with RFOV < 1 (rect FOV) but we need to adjust noise for phase oversampling (RFOV > 1)
+		RFOV_ = 1;
+	}
+	var SNR_mult = Math.sqrt(BW/32) / Math.sqrt(NEX_) / dz / RFOV_; //multiplier for noise (not SNR, bad terminology)
+	document.getElementById('KSpaceSim').changeParams(scan_pct, RFOV, SNR_mult, Nx, NEX);
+}
+
+function calculate_BWpixel() { //calculate BW/pixel
+	var BW = parseInt(document.getElementById('BW').value);
+	var Nx = parseInt(document.getElementById('Nx').value);
+	
+	var BWpix = BW * 1000 / Nx; //BW in kHz
+	BWpix = Math.round(BWpix * 10) / 10;
+	
+	document.getElementById('BW_pixel').value = BWpix;
+	document.getElementById('BW_pixel').style.color = getColor(BWpix, init_BWpix);
+	
+	if(BWpix < 220) {
+		document.getElementById('BWpix_text').innerHTML = "Fat misregistered by " + Math.round(220 / BWpix) + " pixels!";
+	} else {
+		document.getElementById('BWpix_text').innerHTML = "Fat not misregistered!";
+	}
+
+}
+
+function artifact(art) { //trigger artifact display in applet
+	if(haveJava) {
+		document.getElementById('KSpaceSim2').displayArtifact(art);
+	} else {
+		document.getElementById('art_art').src = "mri_art_"+art+".PNG";
+	}
+}
+
+function setPreset(el) { //use one of the preset parameter settings
+	var val = el.value;
+	
+	if(!haveJava) {
+		document.getElementById('alt').src = "mri_"+val+".PNG";
+	}
+
+	//Reset to all boxes to initial values
+	document.getElementById('RFOV').value = 100;
+	document.getElementById('scan_pct').value = 100;
+	document.getElementById('N').value = 256;
+	document.getElementById('NEX').value = 1;
+	
+	document.getElementById('Gx').value = 10;
+	document.getElementById('BW').value = 32;
+	document.getElementById('Nx').value = 256;
+	document.getElementById('Ny').value = 256;
+	document.getElementById('dz').value = 1;
+	document.getElementById('dtx').value = .03;
+	document.getElementById('tx').value = 8;
+	document.getElementById('dkx').value = .13;
+	document.getElementById('kx').value = 34.1;
+	document.getElementById('dky').value = .13;
+	document.getElementById('ky').value = 34.1;
+	document.getElementById('dx').value = .29;
+	document.getElementById('FOVx').value = 7.5;
+	document.getElementById('dy').value = .29;
+	document.getElementById('FOVy').value = 7.5;
+	document.getElementById('scan_time').value = 32;
+	document.getElementById('BW_pixel').value = 125;
+
+	
+	if(val == "rfov75") {
+		document.getElementById('RFOV').value = 75;
+		change_RFOV();
+	} else if(val == "rfov50") {
+		document.getElementById('RFOV').value = 50;
+		change_RFOV();
+	} else if(val == "rfov25") {
+		document.getElementById('RFOV').value = 25;
+		change_RFOV();
+	} else if(val == "sp50") {
+		document.getElementById('scan_pct').value = 50;
+		change_N();
+	} else if(val == "sp25") {
+		document.getElementById('scan_pct').value = 25;
+		change_N();
+	} else if(val == "mat128") {
+		document.getElementById('N').value = 128;
+		change_N();
+	} else if(val == "nex3") {
+		document.getElementById('NEX').value = 3;
+		change_NEXz();
+	} else if(val == "nex51") {
+		document.getElementById('NEX').value = 0.51;
+		change_NEXz();
+	} else if(val == "nex48") {
+		document.getElementById('NEX').value = 0.48;
+		change_NEXz();
+	} else {
+		calculate_SNR(); //default -> just update the applet really
+	}
+}
+
+</script>
+<script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-52206512-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+</head>
+<body onLoad="testApplet('KSpaceSim','mri_100.PNG','alt'); testApplet('KSpaceSim2','mri_art_none.PNG','art_art'); init_calc();" style="background-color:white">
+<div class="main_div">
+<form id="form1">
+<h1>MRI Physics: MRI Image Formation Parameters, SNR, and Artifacts</h1>
+<div style="text-align: center; font-size: 120%; font-family: sans-serif">
+<a href="#snr">Image Formation Parameters & SNR</a> | <a href="#art">Artifacts</a> | <a href="index.html">Go Home</a>
+</div>
+<a name="snr"></a><p>This MRI simulation shows you how changes in scanner parameters affect the image, aliasing, and SNR. Change the numbers in the boxes to see the effects.
+<span style="color: green">Green</span> = higher value; <span style="color: red">Red</span> = lower value.</span> <i>If your browser does not support Java,
+use the examples to see the image change.</i></p>
+<p style="font-size: 120%; font-weight: bold">Some examples:</b> <select id="presets" onChange="setPreset(this)" style="font-size: 100%;">
+<option value="100" selected>Default</option>
+<option value="rfov75">Rectangular FOV 75%</option>
+<option value="rfov50">Rectangular FOV 50%</option>
+<option value="rfov25">Rectangular FOV 25%</option>
+<option value="sp50">Scan Percentage 50%</option>
+<option value="sp25">Scan Percentage 25%</option>
+<option value="mat128">Matrix Size 128</option>
+<option value="nex3">NEx 3</option>
+<option value="nex51">NEx 51% (Half-Fourier)</option>
+<option value="nex48">NEx 48%</option>
+</select>
+</p>
+<table width="100%">
+<tr>
+<td width="33%" style="vertical-align: top">
+
+<p style="font-size: 120%; font-weight: bold">Parameters</p>
+<p>&gamma; = 42.6 MHz/T<!--<br>B0 <input type="text" id="B0" size=4 value="1.5" disabled>T--></p>
+<p>Gx <input type="text" id="Gx" size=4 value="10" disabled>mT/m</p>
+<p>BW<a href="#" title="Assumes fixed field of view">*</a>
+<input type="text" id="BW" size=4 value="32" onChange="change_BW()">kHz = &plusmn; <input type="text" id="BW2" size=4 disabled>kHz</p>
+<hr width="50%">
+<p>Matrix Size:<br>
+N <input type="text" id="N" size=4 value="256" onChange="change_N()"> Scan percentage <input type="text" id="scan_pct" size=4 value="100" onChange="change_N()">%<br>
+Nx <input type="text" id="Nx" size=4 disabled> x Ny <input type="text" id="Ny" size=4 disabled>
+</p>
+<p>NEX<a href="#" title="NEX reflects # averages but also half-Fourier methods (NEX = 0.5)">&dagger;</a>
+<input type="text" id="NEX" size=4 value="1" onChange="change_NEXz()"><br>
+&Delta;z <input type="text" id="dz" size=4 value="1" onChange="change_NEXz()">mm</p>
+<hr width="50%">
+<p>&Delta;tx <input type="text" id="dtx" size=4 disabled>ms = 1/BW</p>
+<p>tx <input type="text" id="tx" size=4 disabled>ms = &Delta;tx * Nx</p>
+<hr width="50%">
+<p>Assume FSE with TR = 1000 ms, ETL = 8.<br>
+Scan time <input type="text" id="scan_time" size=4 disabled>s</p>
+<p id="scan_time_text" style="font-size: 120%; font-weight: bold">Scan time Unchanged.</p>
+</td>
+<td width="33%" style="vertical-align: top">
+<p style="font-size: 120%; font-weight: bold">K Space</p>
+<p>&Delta;kx <input type="text" id="dkx" size=4 disabled>cm<sup>-1</sup> = 1/FOVx = &gamma; * Gx * &Delta;tx</p>
+<p>kx <input type="text" id="kx" size=4 disabled>cm<sup>-1</sup> = &Delta;kx * Nx = 1/&Delta;x</p>
+<p>&Delta;ky <input type="text" id="dky" size=4 disabled>cm<sup>-1</sup> = 1/FOVy</p>
+<p>ky <input type="text" id="ky" size=4 disabled>cm<sup>-1</sup> = &Delta;kx * Nx = 1/&Delta;y</p>
+<hr width="50%">
+<p style="font-size: 120%; font-weight: bold">Chemical Shift</p>
+<p>At B<sub>0</sub> = 1.5 T,<br>&Delta;f(fat-water) = 3.5E-6 * &gamma; * B<sub>0</sub> = 220 Hz.</p>
+<p>BW/pixel <input type="text" id="BW_pixel" size=4 disabled>Hz/pixel</p>
+<p id="BWpix_text" style="font-size: 120%; font-weight: bold">Misregistration by </p>
+</td>
+<td width="33%" style="vertical-align: top">
+<p style="font-size: 120%; font-weight: bold">Image</p>
+<p>&Delta;x <input type="text" id="dx" size=4 onChange="change_Res()">mm = FOVx / Nx</p>
+<p>FOVx<a href="#" title="Assumes fixed matrix size, i.e. resolution changes accordingly; BW is also kept fixed">*</a>
+<input type="text" id="FOVx" size=4 onChange="change_FOV()">cm = BW / (&gamma; * Gx)</p>
+<p>&Delta;y <input type="text" id="dy" size=4 disabled>mm = FOVy / Ny</p>
+<p>Rectangular FOV<a href="#" title="Or phase oversampling if RFOV > 100%">&dagger;</a>
+<input type="text" id="RFOV" size=4 value="100" onChange="change_RFOV()">%</p>
+<p>FOVy <input type="text" id="FOVy" size=4 disabled>cm = FOVx * RFOV</p>
+<p id="Res_text" style="font-size: 120%; font-weight: bold">Resolution Unchanged.</p>
+<p id="FOV_text" style="font-size: 120%; font-weight: bold">FOV Unchanged.</p>
+<hr width="50%">
+<p>2D SNR <input type="text" id="SNR" size=4 disabled> relative to baseline<br>
+SNR &prop; (voxel volume) * sqrt(sampling time)<br>
+= &Delta;x * &Delta;y * &Delta;z * sqrt(Ny * NEX / BW)<br>
+= FOVx/Nx * FOVy * &Delta;z * sqrt(NEX / (Ny * BW))</p>
+<p id="SNR_text" style="font-size: 120%; font-weight: bold">SNR Unchanged.</p>
+</td>
+
+<td style="width: 25%; vertical-align: top">
+<applet code="edu.wustl.KSpaceSim.class" id="KSpaceSim" archive="KSpaceSim.jar" width=300 height=600>
+<param name="img" value="mri.jpg">
+<img src="mri_100.PNG" id="alt" alt="MRI Simulation">
+</applet>
+</td>
+</tr>
+</table>
+</form>
+
+<div style="clear: both">
+<hr>
+<h1>Explanations of Bandwidth and Reduced K-Space Acquisition</div>
+
+<p style="font-size: 120%; font-weight: bold">Bandwidth</p>
+<p>Just like in radio, bandwidth refers to the range of frequencies that a receiver listens to.
+Remember than in MRI, the frequencies encode one spatial dimension (for sake of discussion, the x-axis).
+(Of course, these are on top of the 'carrier frequency' which is the precession rate of a proton in the main magnetic field B<sub>0</sub> 
+as given by the Larmor equation.)</p>
+<p>There are several important things to know about bandwidth. The first is its relationship to the frequency encoding gradient strength (Gx)
+and field of view (FOV). As mentioned, the gradient field sets up a relationship between <i>frequency</i> and <i>position</i> along the x-axis.
+Thus, since the bandwidth determines the range of frequencies we receive, it determines our FOV.</p>
+<p style="text-align: center"><img src="mri_1.png" width="488" height="373" alt="Bandwidth and Gradient strength"></p>
+
+<p>The second important thing to know about bandwidth is that it impacts the time required for the acquisition of the echo.
+Wider bandwidth means more high frequencies, and high frequencies are faster to acquire (though your sampling frequency has to be higher as well,
+per the Nyquist theorem). Thus, higher bandwidth takes less time to acquire. This is important for fast gradient echo sequences (e.g. 3D GRE), though less 
+important for many standard FSE sequences (since TR is so long). A more detailed discussion on this subject can be found in the separate section on
+<a href="spatial.html#k">K-space</a>.</p>
+<p>Thirdly, bandwidth affects signal-to-noise (SNR). One major source of noise in MRI is electronic noise in the circuits. This noise is relatively evenly spread
+across <i>all frequencies</i>. As mentioned, increasing bandwidth means increasing the range of frequencies that you are acquiring for your signal. More frequencies
+means you are capturing more of the noise. The overall signal does not change, it is just spread across more frequencies. Thus, same signal and increased noise means
+that SNR goes <b>down</b> with higher bandwidth.</p>
+<p>As a final point, bandwidth also impacts the prominence of chemical shift artifact, which is the difference between the precessional speed of fat and water
+protons. For a full discussion, see the separate section on <a href="chem_sh.html#first">Chemical Shift Artifact</a>, but remember that the gradient sets up a
+frequency differential along the x-axis. The bigger the gradient, the more adjacent pixels are separated in frequency (big gradient => wide bandwidth for the
+same FOV, since our frequency range has to increase).</p>
+<p class="figure"><img src="mri_gx.png" alt="Low versus high bandwidth"></p>
+<p class="caption">Graph illustrating the difference between a low BW = low gradient (<i>blue</i>) and a high BW = high gradient (<i>red</i>).
+Obviously, the frequency difference between pixel 0 and pixel 10 is bigger with the higher gradient, which is why
+a larger bandwidth is needed. The graph also shows how each pixel (e.g. pixels 3 and 4) are <b>more separated</b>
+in frequency with the higher bandwidth.</p>
+<p>Thus, the bigger the gradient, the better fat and water, with their slightly different precessional frequencies, will fit into the same pixel bin. In other words,
+increasing bandwidth <b>reduces</b> chemical shift artifact</b>. Artifacts from metal implants are related to the susceptibility of the
+implants, i.e. how they change the local magnetic field. Near the implants, the magnetic field will be off by a bit, meaning that the precession frequency
+<i>f</i> = <i>&gamma;</i> * <i>B</i> will be slightly off. Thus, for the same reasons as with chemical shift artifact, metal artifacts will <b>decrease</b> with higher
+bandwith.</p>
+
+<p style="font-size: 120%; font-weight: bold">K Space</p>
+<p>K space is a very confusing concept to wrap your mind around fully. The easiest aspect to think about is the concept of <i>frequency data</i> (K space) as 
+compared to <i>pixel data</i> (image or real space). Higher frequency waves are narrower, so they represent the finest details in an image. Think about a sharp edge - 
+the color changes very fast as you cross an edge, i.e. the frequency of change is high. Thus, as you know, the perimeter of K space, which is 
+the high frequency data, represents fine details. The center of K space - low frequency information - represents the smoother parts of the image,
+like major organs (people refer to this as the <u>contrast</u> in the image). K-Space is discussed in more detail in the section on <a href="spatial">Spatial
+Localization in MRI</a>.</p>
+<p>Often we want to speed up our scan by decreasing the number of phase encoding steps. One way to do this is simply not acquire some parts of K space.
+There are several different ways to do this:</p>
+<ul>
+<li><b>Half-Fourier acquisition</b> - We will not discuss this in detail, but this technique relies on underlying symmetry in the Fourier transform
+to reconstruct the image with less data. Resolution does not change, but since we're acquiring less signal, we have to deal with more noise - 
+<i>SNR goes down</i>.
+</li>
+<li>
+<b>Scan percentage</b> - We can just not acquire the very periphery of K space (only in the phase encoding direction, as frequency encoding is pretty much free).
+Since we are not measuring the highest frequencies, our image gets a bit blurry (we lose some of those sharp lines), and thus our <i>resolution goes down</i>.
+</li>
+<li>
+<b>Rectangular field of view</b> - We can just not acquire the outer parts of the image (again, only in the phase encoding direction). Thus, instead of a square,
+we get a rectangle. This does not sacrifice resolution, but since we are acquiring less signal, our <i>SNR goes down as well</i>.
+</li>
+</ul>
+<p>
+The more confusing concept having to do with K space is <i>spatial frequency</i>. This represents converting the pixel-based frequency data that we acquire
+into millimeter- or distance-based frequency data. The MR machine knows how to do this because it knows how strong the frequency and phase-encoding gradients
+are, per millimeter. The confusing aspecct is that spatial frequency is expressed in units of <i>inverse distance</i>.
+</p>
+<hr style="color: black; background-color: black;height: 2px">
+<h1><a name="art"></a>Artifacts</h1>
+<table style="margin-left:auto;margin-right:auto">
+<tr>
+<td style="padding-right: 20px">
+<form id="form2">
+<p><input type="radio" name="art" value="none" onClick="artifact('none')" checked> None</p>
+<p><input type="radio" name="art" value="spike" onClick="artifact('spike')"> Spike</p>
+<p><input type="radio" name="art" value="freq" onClick="artifact('freq')"> RF Contamination</p>
+<p><input type="radio" name="art" value="motion" onClick="artifact('motion')"> Motion</p>
+</form>
+</td>
+<td>
+<applet code="edu.wustl.KSpaceSim.class" id="KSpaceSim2" archive="KSpaceSim.jar" width=600 height=300>
+<param name="img" value="mri.jpg">
+<img id="art_art" src="mri_art_none.PNG" alt="MRI Artifact Simulation">
+</applet>
+</td></tr>
+</table>
+<p>Try the above MRI artifact simulation to see how different artifacts appear in the image and in K-space. All MR artifacts follow from how MR images are acquired. Thus, if you understand K space and how an MR scanner works, you should be able to figure out
+the artifacts.</p>
+<p><b>Spike</b> - This artifact may also be referred to as a stripe or <i>zebra</i> artifact since it produces diagonal lines in the iamge. It's caused by a malfunction
+in the electronics or connections within the scanner so that a single point in K space incorrectly gets a big signal spike. The position of the spike will affect exactly
+how the artifact appears - remember that the frequency encoding direction is along the horizontal axis and the phase along the vertical. Thus, the farther to the left or right, the closer 
+together the artifact's lines will be. Up/down will affect the angle.</p>
+<p><b>Radiofrequency Contamination</b> - This is often referred to as the <i>zipper</i> artifact since the appearance is a dashed line. It's caused by noise of a single
+frequency getting into the scanner room. Remember that the MR scanner is an extremely sensitive radio receiver. If any outside radiowaves get into the room,
+the scanner will pick them up. Usually the problem is that the door to the room was left open, although there may be a problem with the room's Faraday cage.
+Because frequency encodes one spatial dimension (here, the left-right axis of the patient), you will get a line at a certain position along that spatial
+dimension. The position will correspond to where that the scanner 'thinks' that frequency should be (i.e. where the frequency gradient makes protons have
+that particular frequency - the scanner gets fooled by this outside frequency). (Note that in the example here, there are 2 lines because of the symmetry
+of the Fourier transform, but that will not necessarily be the case with real-world signals.)</p>
+<p><b>Motion</b> - Patient motion happens far more slowly than frequency encoding (which occurs in milliseconds) but it does occur on the same timescale
+as phase encoding (seconds). Remember that in a spin echo sequence, each phase encoding step requires 1 TR interval (in fast spin echo, you can lump a bunch of phase encoding steps
+in one TR, so that decreases the effect). The scanner has no way of knowing the patient moved, so it tries to reconstruct the image from inconsistent data.
+You get 'ghosting' artifacts in the phase encoding direction because the signals don't all match up.</p>
+<table style="width: 70%; margin-left: auto; margin-right: auto">
+<tr><td><p style="align:center">"Camera Blur"</p></td><td><p style="align:center">Phase Encoding AP</p></td><td><p style="align:center">Phase Encoding LR</p></td></tr>
+<tr><td><img src="respiratory_realblur.jpg" alt="Camera blur"></td><td><img src="respiratory_freqap.jpg" alt="Respiratory Motion, AP Phase Encoding"></td><td><img src="respiratory_freqlr.jpg" alt="Respiratory Motion, LR Phase Encoding"></td></tr>
+</table>
+<p class="caption">Simulation of the effects of respiratory motion. This is a somewhat cruder simulation of respiratory motion than the example above, but it illustrates the same phenomenon. Respiratory motion causes movement of the anterior abdominal wall. <b>Left,</b> if the MRI scanner were a camera (or CT scanner), motion would blur the image only where it occurs. <b>Center,</b> with the phase encoding in the A-P direction, respiratory motion propagates across the image from front to back (coincidentally the same direction as the physiologic process). <b>Right,</b> with the phase encoding in the L-R direction, respiratory motion propagates across the image from left to right, only affecting the anterior organs. Note that changing the phase encoding gradient direction to LR allows one to better visualize the other organs.</p>
+<p>There are various strategies to minimize these motion artifacts:
+<ul>
+    <li><i>Change the phase encoding direction.</i> Motion artifacts are mostly a problem when they obscure some anatomy of interest. Thus, one solution is to switch the direction of phase encoding (e.g. from A-P to L-R). In that way, the motion artifact will propagate in a different direction. This explains why in breast MR, phase encoding is typically done along the left-right axis (rather than the shorter AP axis): the acquisition is longer but this way, motion artifact from the heart does not obscure the inner breasts.</li>
+    <li><i>Gating.</i> You can use ECG gating to 'freeze' the motion of the heart (and blood within vessels). The scanner will acquire data for the image at the same point in the cardiac cycle, so there is no inconsistency in the image across the phase encoding steps. This is used extensively for <a href="cv_mri.html">cardiac MRI</a>. Similarly, you can freeze respiratory motion using physical patient monitors or so-called Navigator sequences that allow the scanner to acquire images in a single part of the respiratory cycle.</li>
+    <li><i>Saturation bands.</i> You can place a saturation band across the heart to completely suppress its signal. Thus, there will be no signal ghosting because the structure itself has no signal. This is most commonly used in spine MRI.</li>
+    <li><i>Motion-insensitive sequences.</i> Some MRI sequences are relatively insensitive to patient motion. These generally involve different methods of sampling k-space, particularly radial trajectories. Instead of sampling k-space one line at a time in a rectangle, the scanner will sample lines or small rectangles of different angles across k-space. Because phase encoding occurs in different directions for each line, that tends to minimize the motion artifacts in the image.</li>
+</ul>
+<p><b>Vascular Pulsation Artifact.</b> Pulsation artifact or vascular ghosting occurs when rapidly flowing blood vessels are present in the imaging plane. Blood flowing through these vessels pulsates at the patient's heart rate (i.e. there is greater and faster flow during systole). Because phase encoding occurs over several seconds, each slice will be made up of data acquired during systole and during diastole. For the same reasons as respiratory motion, the difference within the vessel from systole to diastole will cause an artifact to propagate in the phase encoding direction. For more detailed discussion of this and other consequences of blood flow, see the page on <a href="mr_flow.html">flow-related phenomena in MRI</a>.</p>
+<p class="figure"><img src="pulsation_ap.jpg" alt="Pulsation Artifact"></p>
+<P class="caption">Simulated pulsation artifact, with phase encoding in the AP direction.</P>
+<p style="font-size: 120%; font-weight: bold">References</p>
+<ol>
+<li>Hashemi, R. H., Bradley, W. G. & Lisanti, C. J. <a href="http://www.amazon.com/MRI-Ray-Hashman-Hashemi-PhD/dp/1608311155/">MRI: the basics</a>. (Lippincott Williams & Wilkins, 2010).</li>
+<li><a href="http://www.revisemri.com/">ReviseMRI.com</a></li>
+</ol>
+<hr>
+<p><i>Applet and content Copyright 2013-2014 Mark Hammer. All rights reserved.</i></p>
+</div>
+</div>
+</body>
+</html>
